@@ -14,9 +14,14 @@ contract TicketExchange is ERC721URIStorage, Ownable {
     address payable public venueOwner;
 
     mapping(uint256 => bool) private _ticketExists;
+    mapping(uint256 => bytes32) public ticketHashes;
+    mapping(uint256 => uint256) private lastValidTimestamps;
+    mapping(uint256 => uint256) private lastValidationCalls;
 
     event TicketMinted(address indexed to, uint256 indexed tokenId);
     event TicketSold(address indexed buyer, uint256 indexed tokenId);
+    
+    uint256 private constant VALIDATE_TICKET_RATE_LIMIT = 1 minutes;
 
     constructor(
         string memory _name,
@@ -37,14 +42,18 @@ contract TicketExchange is ERC721URIStorage, Ownable {
         artist = _artist;
         venueOwner = _venueOwner;
         resellPrice = _resellPrice;
-
         _setTokenURI(1, _tokenURI);
+        uint256 private constant VALIDATE_TICKET_RATE_LIMIT = 1 minutes;
     }
 
-    function mintTicket(address to, uint256 tokenId) external payable onlyOwner {
+     function mintTicket(address to, uint256 tokenId, uint256 userProvidedSeed) external payable onlyOwner {
         require(ticketsSold < maxTickets, "All tickets have been sold");
         require(!_ticketExists[tokenId], "Ticket already exists");
         require(msg.value == ticketCost, "Incorrect ticket cost");
+        
+        // Generate and store a unique hash for the ticket
+        bytes32 ticketHash = keccak256(abi.encodePacked(block.timestamp, block.difficulty, userProvidedSeed));
+        ticketHashes[tokenId] = ticketHash;
 
         _safeMint(to, tokenId);
         _setTokenURI(tokenId, tokenURI(1));
@@ -53,7 +62,11 @@ contract TicketExchange is ERC721URIStorage, Ownable {
 
         emit TicketMinted(to, tokenId);
     }
-
+    function isValidTicket(uint256 tokenId, uint256 timestamp) external view returns (bool) {
+        require(_ticketExists[tokenId], "Ticket does not exist");
+        // The re-randomized QR code is valid only if the timestamp is later than the last valid timestamp for the ticket
+        return timestamp > lastValidTimestamps[tokenId];
+    }
     function buyTicket(uint256 tokenId) external payable {
         require(_ticketExists[tokenId], "Ticket does not exist");
         require(msg.value == ticketCost, "Incorrect ticket cost");
@@ -70,11 +83,23 @@ contract TicketExchange is ERC721URIStorage, Ownable {
 
         emit TicketSold(msg.sender, tokenId);
     }
+    // Call this function from the front-end application when scanning a re-randomized QR code
+    function validateTicket(uint256 tokenId, uint256 timestamp) external onlyOwner {
+        require(isValidTicket(tokenId, timestamp), "Invalid ticket");
+        require(
+            block.timestamp >= lastValidationCalls[tokenId] + VALIDATE_TICKET_RATE_LIMIT,
+            "Rate limit exceeded"
+        );
 
-    function resellTicket(uint256 tokenId) external {
+        // Update the last valid timestamp for the ticket
+        lastValidTimestamps[tokenId] = timestamp;
+        // Update the last time the validateTicket function was called for the ticket
+        lastValidationCalls[tokenId] = block.timestamp;
+    }
+
+    function resellTicket(uint256 tokenId, address payable newOwner) external {
         require(ownerOf(tokenId) == msg.sender, "Not the ticket owner");
 
-        address payable newOwner = payable(msg.sender);
         uint256 currentResellPrice = resellPrice;
 
         _transfer(msg.sender, newOwner, tokenId);
