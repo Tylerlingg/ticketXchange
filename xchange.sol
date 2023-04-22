@@ -22,11 +22,15 @@ contract TicketExchange is ERC721URIStorage, Ownable {
     event TicketSold(address indexed buyer, uint256 indexed tokenId);
     
     uint256 private constant VALIDATE_TICKET_RATE_LIMIT = 1 minutes;
+    uint256 public artistPercentage;
+    uint256 public venuePercentage;
 
     constructor(
         string memory _name,
         string memory _symbol,
         uint256 _ticketCost,
+        uint256 _artistPercentage,
+        uint256 _venuePercentage,
         string memory _venue,
         uint256 _maxTickets,
         string memory _eventDate,
@@ -40,6 +44,8 @@ contract TicketExchange is ERC721URIStorage, Ownable {
         maxTickets = _maxTickets;
         eventDate = _eventDate;
         artist = _artist;
+        artistPercentage = _artistPercentage;
+        venuePercentage = _venuePercentage;
         venueOwner = _venueOwner;
         resellPrice = _resellPrice;
         _setTokenURI(1, _tokenURI);
@@ -75,14 +81,18 @@ contract TicketExchange is ERC721URIStorage, Ownable {
         address payable previousOwner = payable(ownerOf(tokenId));
         _transfer(previousOwner, msg.sender, tokenId);
 
-        // Split the funds between the artist, the venue owner, and the previous owner
-        uint256 splitAmount = msg.value / 3;
-        artist.transfer(splitAmount);
-        venueOwner.transfer(splitAmount);
-        previousOwner.transfer(splitAmount);
+        // Distribute the funds according to the artist's and venue owner's percentages
+        uint256 artistShare = (msg.value * artistPercentage) / 100;
+        uint256 venueShare = (msg.value * venuePercentage) / 100;
+
+        artist.transfer(artistShare);
+        venueOwner.transfer(venueShare);
+
+        // Refund any remaining amount to the previous owner
+        previousOwner.transfer(msg.value - artistShare - venueShare);
 
         emit TicketSold(msg.sender, tokenId);
-    }
+}
     // Call this function from the front-end application when scanning a re-randomized QR code
     function validateTicket(uint256 tokenId, uint256 timestamp) external onlyOwner {
         require(isValidTicket(tokenId, timestamp), "Invalid ticket");
